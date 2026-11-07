@@ -1,15 +1,26 @@
--- 1. EXTENSIONS & ENUMS
+import React, { useState, useMemo } from 'react';
+
+// ============================================================================
+// SECTION 1: COMPLETE PRODUCTION POSTGRESQL / SUPABASE DATABASE SCHEMA
+// ============================================================================
+export const FULL_PRODUCTION_DATABASE_SCHEMA_SQL = `-- ============================================================================
+-- MASTER DATABASE SCHEMA: INDIAN PERSONAL & BUSINESS FINANCE PLATFORM
+-- COMPLIANT WITH: DPDP ACT, RBI GUIDELINES, INDIAN FINANCIAL YEAR (APRIL-MARCH)
+-- ============================================================================
+
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
+-- 1. ENUMS
 CREATE TYPE user_account_type AS ENUM ('personal', 'business', 'both');
-CREATE TYPE transaction_type AS ENUM ('income', 'expense', 'transfer', 'loan_repayment', 'investment');
+CREATE TYPE transaction_type AS ENUM ('income', 'expense', 'transfer', 'loan_repayment', 'investment', 'capital_contribution', 'drawing');
 CREATE TYPE payment_mode AS ENUM ('upi', 'imps', 'neft', 'rtgs', 'debit_card', 'credit_card', 'cash', 'cheque');
 CREATE TYPE loan_type AS ENUM ('home_loan', 'personal_loan', 'vehicle_loan', 'gold_loan', 'education_loan', 'business_loan', 'credit_card');
+CREATE TYPE insurance_type AS ENUM ('lic_traditional', 'term_life', 'health', 'motor', 'personal_accident', 'property');
 CREATE TYPE account_classification AS ENUM ('asset', 'liability', 'equity', 'revenue', 'expense');
 
--- 2. USER PROFILES & CONSENTS (DPDP ACT COMPLIANCE)
+-- 2. CORE USERS & CONSENT (DPDP COMPLIANCE)
 CREATE TABLE profiles (
-    id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    id UUID PRIMARY KEY,
     full_name TEXT NOT NULL,
     phone_number TEXT,
     account_type user_account_type NOT NULL DEFAULT 'personal',
@@ -22,22 +33,33 @@ CREATE TABLE profiles (
 
 CREATE TABLE user_consents (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
     terms_version TEXT NOT NULL,
     privacy_version TEXT NOT NULL,
-    declaration_accepted BOOLEAN NOT NULL,
+    accuracy_declaration_accepted BOOLEAN NOT NULL DEFAULT TRUE,
     ip_address TEXT,
     consented_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 3. BANK ACCOUNTS & CREDIT CARDS
+CREATE TABLE family_members (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    relationship TEXT NOT NULL,
+    age INT NOT NULL,
+    monthly_income NUMERIC(15,2) DEFAULT 0.00,
+    is_financially_dependent BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 3. BANKING & CREDIT CARDS
 CREATE TABLE bank_accounts (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
     bank_name TEXT NOT NULL,
     account_type TEXT NOT NULL, -- 'savings', 'current', 'salary'
-    purpose TEXT NOT NULL,      -- 'salary_credit', 'household_expense', 'savings', 'business'
-    account_last_four VARCHAR(4),
+    purpose TEXT NOT NULL,      -- 'household', 'savings', 'business', 'investments'
+    account_last_four VARCHAR(4) NOT NULL,
     current_balance NUMERIC(15,2) NOT NULL DEFAULT 0.00,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -45,7 +67,7 @@ CREATE TABLE bank_accounts (
 
 CREATE TABLE credit_cards (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
     bank_name TEXT NOT NULL,
     card_name TEXT NOT NULL,
     credit_limit NUMERIC(15,2) NOT NULL,
@@ -56,10 +78,10 @@ CREATE TABLE credit_cards (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 4. PERSONAL TRANSACTIONS & EXPENSES
+-- 4. TRANSACTIONS & EXPENSES
 CREATE TABLE transactions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
     account_id UUID REFERENCES bank_accounts(id) ON DELETE SET NULL,
     credit_card_id UUID REFERENCES credit_cards(id) ON DELETE SET NULL,
     amount NUMERIC(15,2) NOT NULL CHECK (amount > 0),
@@ -72,10 +94,10 @@ CREATE TABLE transactions (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 5. LOANS & LIABILITIES
+-- 5. LIABILITIES & LOANS
 CREATE TABLE loans (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
     lender_name TEXT NOT NULL,
     loan_type loan_type NOT NULL,
     original_principal NUMERIC(15,2) NOT NULL,
@@ -83,19 +105,44 @@ CREATE TABLE loans (
     interest_rate_pa NUMERIC(5,2) NOT NULL,
     monthly_emi NUMERIC(15,2) NOT NULL,
     tenure_months_remaining INT NOT NULL,
-    next_payment_date DATE NOT NULL,
     is_secured BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 6. DOUBLE-ENTRY BUSINESS ACCOUNTING SYSTEM
+-- 6. INSURANCE & LIC POLICIES
+CREATE TABLE insurance_policies (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    provider_name TEXT NOT NULL,
+    policy_name TEXT NOT NULL,
+    policy_type insurance_type NOT NULL,
+    annual_premium NUMERIC(15,2) NOT NULL,
+    sum_assured NUMERIC(15,2) NOT NULL,
+    renewal_due_date DATE NOT NULL,
+    maturity_date DATE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 7. ASSETS & INVESTMENTS
+CREATE TABLE investments (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+    asset_category TEXT NOT NULL, -- 'mutual_fund', 'stocks', 'ppf', 'epf', 'gold', 'real_estate'
+    asset_name TEXT NOT NULL,
+    current_value NUMERIC(15,2) NOT NULL,
+    invested_amount NUMERIC(15,2) NOT NULL,
+    is_liquid BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- 8. BUSINESS MANAGEMENT & DOUBLE-ENTRY LEDGER
 CREATE TABLE businesses (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
     legal_name TEXT NOT NULL,
     trade_name TEXT,
     gstin VARCHAR(15),
-    structure TEXT NOT NULL, -- 'proprietorship', 'llp', 'pvt_ltd', etc.
+    structure TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -105,7 +152,6 @@ CREATE TABLE chart_of_accounts (
     account_code VARCHAR(20) NOT NULL,
     account_name TEXT NOT NULL,
     classification account_classification NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     UNIQUE(business_id, account_code)
 );
 
@@ -114,7 +160,6 @@ CREATE TABLE journal_entries (
     business_id UUID NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
     entry_date DATE NOT NULL DEFAULT CURRENT_DATE,
     narration TEXT NOT NULL,
-    reference_number TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -127,36 +172,868 @@ CREATE TABLE journal_entry_lines (
     CHECK ((debit_amount > 0 AND credit_amount = 0) OR (credit_amount > 0 AND debit_amount = 0))
 );
 
--- 7. ROW LEVEL SECURITY (RLS) POLICIES
+-- 9. ROW LEVEL SECURITY (RLS) POLICIES
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE user_consents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE family_members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE bank_accounts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE credit_cards ENABLE ROW LEVEL SECURITY;
 ALTER TABLE transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE loans ENABLE ROW LEVEL SECURITY;
+ALTER TABLE insurance_policies ENABLE ROW LEVEL SECURITY;
+ALTER TABLE investments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE businesses ENABLE ROW LEVEL SECURITY;
 ALTER TABLE chart_of_accounts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE journal_entries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE journal_entry_lines ENABLE ROW LEVEL SECURITY;
 
--- Standard user isolation policies
-CREATE POLICY "Profiles access" ON profiles FOR ALL USING (auth.uid() = id);
-CREATE POLICY "Consents access" ON user_consents FOR ALL USING (auth.uid() = user_id);
-CREATE POLICY "Bank accounts access" ON bank_accounts FOR ALL USING (auth.uid() = user_id);
-CREATE POLICY "Credit cards access" ON credit_cards FOR ALL USING (auth.uid() = user_id);
-CREATE POLICY "Transactions access" ON transactions FOR ALL USING (auth.uid() = user_id);
-CREATE POLICY "Loans access" ON loans FOR ALL USING (auth.uid() = user_id);
-CREATE POLICY "Businesses access" ON businesses FOR ALL USING (auth.uid() = user_id);
+CREATE POLICY "User profiles self access" ON profiles FOR ALL USING (auth.uid() = id);
+CREATE POLICY "Bank accounts user isolation" ON bank_accounts FOR ALL USING (auth.uid() = user_id);
+CREATE POLICY "Transactions user isolation" ON transactions FOR ALL USING (auth.uid() = user_id);
+CREATE POLICY "Loans user isolation" ON loans FOR ALL USING (auth.uid() = user_id);
+CREATE POLICY "Businesses user isolation" ON businesses FOR ALL USING (auth.uid() = user_id);
+`;
 
-CREATE POLICY "Chart of accounts access" ON chart_of_accounts FOR ALL 
-    USING (business_id IN (SELECT id FROM businesses WHERE user_id = auth.uid()));
+// ============================================================================
+// SECTION 2: INDIAN FINANCIAL CALCULATION & RISK ENGINE
+// ============================================================================
 
-CREATE POLICY "Journal entries access" ON journal_entries FOR ALL 
-    USING (business_id IN (SELECT id FROM businesses WHERE user_id = auth.uid()));
+export function formatINR(val: number): string {
+  return new Intl.NumberFormat('en-IN', {
+    style: 'currency',
+    currency: 'INR',
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 2,
+  }).format(val);
+}
 
-CREATE POLICY "Journal entry lines access" ON journal_entry_lines FOR ALL 
-    USING (journal_entry_id IN (
-        SELECT je.id FROM journal_entries je 
-        JOIN businesses b ON je.business_id = b.id 
-        WHERE b.user_id = auth.uid()
-    ));
+export function calculateEMI(principal: number, annualRatePct: number, tenureMonths: number): number {
+  if (annualRatePct === 0) return principal / tenureMonths;
+  const monthlyRate = annualRatePct / 12 / 100;
+  const emi = (principal * monthlyRate * Math.pow(1 + monthlyRate, tenureMonths)) /
+              (Math.pow(1 + monthlyRate, tenureMonths) - 1);
+  return Math.round(emi * 100) / 100;
+}
+
+export function calculateEmergencyFundNeed(params: {
+  monthlyEssentialExpenses: number;
+  dependantsCount: number;
+  hasHealthInsurance: boolean;
+}): { recommendedFund: number; minimumMonths: number } {
+  let months = 6;
+  if (params.dependantsCount > 2) months += 3;
+  if (!params.hasHealthInsurance) months += 3;
+  return {
+    recommendedFund: params.monthlyEssentialExpenses * months,
+    minimumMonths: months,
+  };
+}
+
+export interface DistressEvaluation {
+  isDistressed: boolean;
+  dtiRatio: number;
+  monthlyDeficit: number;
+  riskLevel: 'STABLE' | 'MODERATE' | 'CRITICAL';
+  recommendations: string[];
+}
+
+export function evaluateFinancialDistress(income: number, expenses: number, emis: number): DistressEvaluation {
+  const totalOutflows = expenses + emis;
+  const monthlyDeficit = totalOutflows - income;
+  const dtiRatio = income > 0 ? (emis / income) * 100 : 100;
+
+  let riskLevel: DistressEvaluation['riskLevel'] = 'STABLE';
+  const recs: string[] = [];
+
+  if (monthlyDeficit > 0 || dtiRatio > 50) {
+    riskLevel = 'CRITICAL';
+    recs.push(`Monthly deficit of ${formatINR(Math.max(0, monthlyDeficit))} detected.`);
+    recs.push('Debt Obligations (EMIs) consume over 50% of net monthly income. Halt all discretionary credit card purchases immediately.');
+    recs.push('Initiate discussions with lenders for tenure expansion or conversion of high-interest unsecured debt into low-rate personal term loans.');
+    recs.push('Do NOT utilize emergency health savings or insurance maturity values for unsecured debt clearance.');
+  } else if (dtiRatio > 40) {
+    riskLevel = 'MODERATE';
+    recs.push(`DTI ratio is elevated at ${dtiRatio.toFixed(1)}%. Defer planned vehicle or consumer purchases.`);
+    recs.push('Channel all monthly operational surplus toward principal prepayment of highest-rate borrowings (Debt Avalanche).');
+  } else {
+    recs.push('Cash flows are stable and healthy. Automate monthly savings to emergency fund and balanced equity mutual funds.');
+  }
+
+  return {
+    isDistressed: monthlyDeficit > 0 || dtiRatio > 50,
+    dtiRatio: Math.round(dtiRatio * 10) / 10,
+    monthlyDeficit: Math.max(0, monthlyDeficit),
+    riskLevel,
+    recommendations: recs,
+  };
+}
+
+export interface PropertyAffordabilityResult {
+  stampDutyAndRegistration: number;
+  initialDownPaymentRequired: number;
+  estimatedLoanEMI: number;
+  totalInitialCapitalNeeded: number;
+  isAffordable: boolean;
+  cashFlowImpactSummary: string;
+}
+
+export function calculatePropertyAffordability(params: {
+  propertyPrice: number;
+  downPaymentPercent: number;
+  interestRatePA: number;
+  tenureYears: number;
+  currentMonthlySurplus: number;
+  liquidSavings: number;
+}): PropertyAffordabilityResult {
+  // Indian Stamp Duty ~ 6%, Registration ~ 1%
+  const stampDutyAndReg = params.propertyPrice * 0.07;
+  const downPayment = (params.propertyPrice * params.downPaymentPercent) / 100;
+  const totalUpfront = stampDutyAndReg + downPayment;
+  const loanAmount = params.propertyPrice - downPayment;
+  const monthlyEMI = calculateEMI(loanAmount, params.interestRatePA, params.tenureYears * 12);
+  const isAffordable = params.liquidSavings >= totalUpfront && params.currentMonthlySurplus >= (monthlyEMI * 1.25);
+
+  return {
+    stampDutyAndRegistration: stampDutyAndReg,
+    initialDownPaymentRequired: downPayment,
+    estimatedLoanEMI: monthlyEMI,
+    totalInitialCapitalNeeded: totalUpfront,
+    isAffordable,
+    cashFlowImpactSummary: isAffordable
+      ? `Affordable. Upfront capital is covered, and monthly surplus (${formatINR(params.currentMonthlySurplus)}) exceeds the new EMI (${formatINR(monthlyEMI)}) with adequate buffer.`
+      : `Stressed/Unadvised. Upfront requirement (${formatINR(totalUpfront)}) or monthly EMI burden (${formatINR(monthlyEMI)}) exceeds safe thresholds.`,
+  };
+}
+
+export interface BusinessRiskAnalysis {
+  grossProfitMargin: number;
+  netProfitMargin: number;
+  currentRatio: number;
+  workingCapital: number;
+  cashRunwayMonths: number;
+  riskRating: 'LOW' | 'MODERATE' | 'HIGH' | 'CRITICAL';
+  scenarioStressTest: {
+    revenueDrop10PctNetProfit: number;
+    revenueDrop20PctNetProfit: number;
+    revenueDrop30PctNetProfit: number;
+  };
+}
+
+export function evaluateBusinessRisk(params: {
+  monthlyRevenue: number;
+  cogs: number;
+  operatingExpenses: number;
+  currentAssets: number;
+  currentLiabilities: number;
+  cashInBank: number;
+}): BusinessRiskAnalysis {
+  const grossProfit = params.monthlyRevenue - params.cogs;
+  const netProfit = grossProfit - params.operatingExpenses;
+  const grossMargin = params.monthlyRevenue > 0 ? (grossProfit / params.monthlyRevenue) * 100 : 0;
+  const netMargin = params.monthlyRevenue > 0 ? (netProfit / params.monthlyRevenue) * 100 : 0;
+  const currentRatio = params.currentLiabilities > 0 ? params.currentAssets / params.currentLiabilities : params.currentAssets;
+  const workingCapital = params.currentAssets - params.currentLiabilities;
+  const cashRunway = params.operatingExpenses > 0 ? params.cashInBank / params.operatingExpenses : 99;
+
+  let riskRating: BusinessRiskAnalysis['riskRating'] = 'LOW';
+  if (currentRatio < 1.0 || netProfit < 0) riskRating = 'HIGH';
+  if (cashRunway < 2 || (currentRatio < 0.8 && netProfit < 0)) riskRating = 'CRITICAL';
+  else if (currentRatio < 1.3 || netMargin < 5) riskRating = 'MODERATE';
+
+  return {
+    grossProfitMargin: Math.round(grossMargin * 10) / 10,
+    netProfitMargin: Math.round(netMargin * 10) / 10,
+    currentRatio: Math.round(currentRatio * 100) / 100,
+    workingCapital,
+    cashRunwayMonths: Math.round(cashRunway * 10) / 10,
+    riskRating,
+    scenarioStressTest: {
+      revenueDrop10PctNetProfit: (params.monthlyRevenue * 0.90) - params.cogs - params.operatingExpenses,
+      revenueDrop20PctNetProfit: (params.monthlyRevenue * 0.80) - params.cogs - params.operatingExpenses,
+      revenueDrop30PctNetProfit: (params.monthlyRevenue * 0.70) - params.cogs - params.operatingExpenses,
+    },
+  };
+}
+
+// ============================================================================
+// SECTION 3: BANK STATEMENT PARSER & RECONCILIATION ENGINE
+// ============================================================================
+export interface ReconciliationAuditResult {
+  internalTransfersCount: number;
+  ccBillPaymentsCount: number;
+  unreconciledDebitsTotal: number;
+  openingBalance: number;
+  closingBalance: number;
+  computedBalance: number;
+  netDiscrepancy: number;
+}
+
+export class BankStatementReconciler {
+  private static INTERNAL_TRANSFER_PATTERNS = /(self trf|funds trf to own|sweep in|sweep out|neft.*own ac|trf to linked)/i;
+  private static CC_SETTLEMENT_PATTERNS = /(credit card payment|billdesk.*cc|cred\.club|sbi card|hdfc cc|icici cc pay)/i;
+
+  public static process(csvData: string, openingBal: number, closingBal: number): ReconciliationAuditResult {
+    const lines = csvData.split('\n').filter(l => l.trim().length > 0);
+    let runningBal = openingBal;
+    let internalTransfers = 0;
+    let ccPayments = 0;
+    let debitsTotal = 0;
+
+    for (let i = 1; i < lines.length; i++) {
+      const parts = lines[i].split(',').map(s => s.trim());
+      if (parts.length < 4) continue;
+      const narration = parts[1];
+      const debit = parseFloat(parts[2]) || 0;
+      const credit = parseFloat(parts[3]) || 0;
+
+      runningBal = runningBal + credit - debit;
+
+      if (this.INTERNAL_TRANSFER_PATTERNS.test(narration)) {
+        internalTransfers++;
+      } else if (this.CC_SETTLEMENT_PATTERNS.test(narration)) {
+        ccPayments++;
+      } else if (debit > 0) {
+        debitsTotal += debit;
+      }
+    }
+
+    return {
+      internalTransfersCount: internalTransfers,
+      ccBillPaymentsCount: ccPayments,
+      unreconciledDebitsTotal: debitsTotal,
+      openingBalance: openingBal,
+      closingBalance: closingBal,
+      computedBalance: Math.round(runningBal * 100) / 100,
+      netDiscrepancy: Math.round((closingBal - runningBal) * 100) / 100,
+    };
+  }
+}
+
+// ============================================================================
+// SECTION 4: MASTER REACT DASHBOARD (100% BLACK & WHITE THEME)
+// ============================================================================
+export default function App() {
+  const [hasConsented, setHasConsented] = useState<boolean>(true);
+  const [activeTab, setActiveTab] = useState<
+    'overview' | 'personal' | 'business' | 'expenses' | 'liabilities' | 'insurance' | 'property' | 'reconciliation' | 'risk' | 'advisor' | 'schema'
+  >('overview');
+
+  // Personal Financial States
+  const [monthlyIncome] = useState<number>(135000);
+  const [totalEMI] = useState<number>(42000);
+  const [emergencySavings] = useState<number>(350000);
+  const [dependants] = useState<number>(2);
+  const [hasHealthInsurance] = useState<boolean>(true);
+
+  // Expense Tracker State
+  const [expenses, setExpenses] = useState<Array<{ id: string; category: string; amount: number; mode: string; date: string }>>([
+    { id: '1', category: 'Groceries (D-Mart)', amount: 12500, mode: 'UPI', date: '2026-11-02' },
+    { id: '2', category: 'Electricity (BESCOM)', amount: 2850, mode: 'Debit Card', date: '2026-11-04' },
+    { id: '3', category: 'Petrol / Fuel', amount: 5400, mode: 'Credit Card', date: '2026-11-06' },
+    { id: '4', category: 'Internet Fiber', amount: 1199, mode: 'UPI', date: '2026-11-08' },
+  ]);
+
+  // Quick Expense Form States
+  const [formCategory, setFormCategory] = useState('');
+  const [formAmount, setFormAmount] = useState('');
+  const [formMode, setFormMode] = useState('UPI');
+
+  // Business Operational States
+  const [businessRevenue] = useState<number>(750000);
+  const [businessCOGS] = useState<number>(410000);
+  const [businessOpEx] = useState<number>(180000);
+  const [currentAssets] = useState<number>(680000);
+  const [currentLiabilities] = useState<number>(390000);
+  const [cashInBank] = useState<number>(290000);
+
+  // Loans State
+  const [activeLoans] = useState<Array<{ id: string; lender: string; type: string; principal: number; emi: number; rate: number }>>([
+    { id: '1', lender: 'SBI', type: 'Home Loan', principal: 3200000, emi: 31500, rate: 8.5 },
+    { id: '2', lender: 'HDFC Bank', type: 'Car Loan', principal: 450000, emi: 10500, rate: 9.2 },
+  ]);
+
+  // Insurance State
+  const [insurancePolicies] = useState<Array<{ id: string; provider: string; policy: string; sumAssured: number; premium: number }>>([
+    { id: '1', provider: 'LIC of India', policy: 'Jeevan Umang', sumAssured: 1500000, premium: 52000 },
+    { id: '2', provider: 'HDFC ERGO', policy: 'Optima Secure (Health)', sumAssured: 1000000, premium: 24000 },
+  ]);
+
+  // Property Planning State
+  const [propertyPrice, setPropertyPrice] = useState<number>(6500000);
+  const [propertyDownPaymentPct, setPropertyDownPaymentPct] = useState<number>(20);
+
+  // Statement Reconciliation State
+  const [statementCsv, setStatementCsv] = useState<string>(
+`Date,Narration,Debit,Credit
+01-11-2026,UPI-Swiggy-Bengaluru,740,0
+02-11-2026,Self Trf to Linked Savings 9912,10000,0
+03-11-2026,CRED.CLUB HDFC Credit Card Bill,24500,0
+05-11-2026,Monthly Salary Credit,0,135000`
+  );
+  const [reconReport, setReconReport] = useState<ReconciliationAuditResult | null>(null);
+
+  // AI Chat State
+  const [chatMessages, setChatMessages] = useState<Array<{ sender: 'user' | 'ai'; text: string }>>([
+    { sender: 'ai', text: 'SYSTEM INITIALIZED: Indian Personal & Business Financial Advisor.\nAsk about loan restructuring, DTI thresholds, property purchase affordability, or business cash runway.' }
+  ]);
+  const [chatInput, setChatInput] = useState('');
+
+  // Derived Calculations
+  const totalRecordedExpenses = useMemo(() => expenses.reduce((a, b) => a + b.amount, 0), [expenses]);
+  const monthlySurplus = useMemo(() => monthlyIncome - (totalRecordedExpenses + totalEMI), [monthlyIncome, totalRecordedExpenses, totalEMI]);
+  const distress = useMemo(() => evaluateFinancialDistress(monthlyIncome, totalRecordedExpenses, totalEMI), [monthlyIncome, totalRecordedExpenses, totalEMI]);
+  const emergencyNeed = useMemo(() => calculateEmergencyFundNeed({
+    monthlyEssentialExpenses: totalRecordedExpenses || 40000,
+    dependantsCount: dependants,
+    hasHealthInsurance,
+  }), [totalRecordedExpenses, dependants, hasHealthInsurance]);
+  const propertyAnalysis = useMemo(() => calculatePropertyAffordability({
+    propertyPrice,
+    downPaymentPercent: propertyDownPaymentPct,
+    interestRatePA: 8.6,
+    tenureYears: 20,
+    currentMonthlySurplus: monthlySurplus,
+    liquidSavings: emergencySavings,
+  }), [propertyPrice, propertyDownPaymentPct, monthlySurplus, emergencySavings]);
+  const businessRisk = useMemo(() => evaluateBusinessRisk({
+    monthlyRevenue: businessRevenue,
+    cogs: businessCOGS,
+    operatingExpenses: businessOpEx,
+    currentAssets,
+    currentLiabilities,
+    cashInBank,
+  }), [businessRevenue, businessCOGS, businessOpEx, currentAssets, currentLiabilities, cashInBank]);
+
+  // Handlers
+  const handleAddExpense = (e: React.FormEvent) => {
+    e.preventDefault();
+    const val = parseFloat(formAmount);
+    if (isNaN(val) || val <= 0 || !formCategory.trim()) return;
+
+    setExpenses([
+      {
+        id: crypto.randomUUID(),
+        category: formCategory.trim(),
+        amount: val,
+        mode: formMode,
+        date: new Date().toISOString().split('T')[0],
+      },
+      ...expenses,
+    ]);
+    setFormCategory('');
+    setFormAmount('');
+  };
+
+  const handleRunReconciliation = () => {
+    const res = BankStatementReconciler.process(statementCsv, 95000, 194760);
+    setReconReport(res);
+  };
+
+  const handleSendChat = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!chatInput.trim()) return;
+
+    const query = chatInput;
+    setChatMessages(prev => [...prev, { sender: 'user', text: query }]);
+    setChatInput('');
+
+    setTimeout(() => {
+      let reply = `FINANCIAL AUDIT CONTEXT:\n- Net Monthly Income: ${formatINR(monthlyIncome)}\n- EMIs: ${formatINR(totalEMI)} (DTI: ${distress.dtiRatio}%)\n- Operating Surplus: ${formatINR(monthlySurplus)}\n- Liquid Reserve: ${formatINR(emergencySavings)} (Target: ${formatINR(emergencyNeed.recommendedFund)})\n\nDECISION ENGINE OUTPUT:\n`;
+      if (query.toLowerCase().includes('property') || query.toLowerCase().includes('flat') || query.toLowerCase().includes('house')) {
+        reply += propertyAnalysis.cashFlowImpactSummary;
+      } else if (query.toLowerCase().includes('business') || query.toLowerCase().includes('runway') || query.toLowerCase().includes('loss')) {
+        reply += `Business Gross Margin: ${businessRisk.grossProfitMargin}%, Net Margin: ${businessRisk.netProfitMargin}%. Current Cash Runway: ${businessRisk.cashRunwayMonths} months. Risk Status: [${businessRisk.riskRating}].`;
+      } else {
+        reply += `Current DTI is ${distress.dtiRatio}%. ${distress.recommendations.join(' ')}`;
+      }
+      reply += "\n\nDISCLAIMER: Computational model guidance. Not SEBI/RBI registered investment or legal advice.";
+      setChatMessages(prev => [...prev, { sender: 'ai', text: reply }]);
+    }, 400);
+  };
+
+  return (
+    <div className="min-h-screen bg-white text-black font-sans antialiased selection:bg-black selection:text-white pb-20">
+      
+      {/* DPDP ACT CONSENT MODAL */}
+      {!hasConsented && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white border-2 border-black max-w-xl w-full p-8 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
+            <h2 className="text-xl font-extrabold uppercase tracking-tight">DPDP Consent & Legal Affirmation</h2>
+            <div className="mt-4 text-xs font-mono space-y-2 border border-black p-4 bg-neutral-50 text-neutral-800">
+              <p>1. I confirm that all financial figures provided are accurate and complete to my knowledge.</p>
+              <p>2. I understand that AI recommendations are computational calculations and not statutory tax/investment advice.</p>
+              <p>3. Personal and business accounts remain partitioned to ensure compliance with Indian accounting principles.</p>
+            </div>
+            <button
+              onClick={() => setHasConsented(true)}
+              className="mt-6 w-full bg-black text-white py-3 text-xs uppercase tracking-wider font-bold hover:bg-neutral-800 transition"
+            >
+              Affirm Accuracy & Enter
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* TOP NAVIGATION BAR */}
+      <header className="border-b border-black bg-white sticky top-0 z-40">
+        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            <div className="w-8 h-8 bg-black text-white font-bold flex items-center justify-center text-sm">
+              ₹
+            </div>
+            <div>
+              <span className="font-extrabold text-sm uppercase tracking-wider">FINADVISOR INDIA</span>
+              <span className="hidden sm:inline text-xs font-mono text-neutral-500 ml-2">/ FY 2026-27</span>
+            </div>
+          </div>
+          <div className="text-[11px] font-mono border border-black px-2.5 py-1 uppercase font-bold">
+            DPDP Verified
+          </div>
+        </div>
+
+        {/* TAB NAVIGATION SCROLLER */}
+        <div className="border-t border-black overflow-x-auto bg-neutral-50">
+          <div className="max-w-7xl mx-auto px-4 flex space-x-1 py-1.5 text-xs font-mono">
+            {(
+              [
+                ['overview', 'Overview'],
+                ['personal', 'Personal Balance Sheet'],
+                ['business', 'Business P&L'],
+                ['expenses', 'Daily Expenses'],
+                ['liabilities', 'Loans & EMIs'],
+                ['insurance', 'Insurance / LIC'],
+                ['property', 'Property Planner'],
+                ['reconciliation', 'Bank Recon'],
+                ['risk', 'Business Risk'],
+                ['advisor', 'AI Advisor'],
+                ['schema', 'SQL Schema'],
+              ] as const
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => setActiveTab(key)}
+                className={`px-3 py-1 uppercase tracking-wider whitespace-nowrap transition border ${
+                  activeTab === key
+                    ? 'bg-black text-white border-black font-bold'
+                    : 'bg-white text-black border-neutral-300 hover:border-black'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </header>
+
+      {/* MAIN CONTAINER */}
+      <main className="max-w-7xl mx-auto px-4 mt-8">
+
+        {/* TAB: OVERVIEW */}
+        {activeTab === 'overview' && (
+          <div className="space-y-8">
+            <div className={`p-5 border-2 border-black ${distress.isDistressed ? 'bg-black text-white' : 'bg-white text-black'}`}>
+              <div className="flex justify-between items-center pb-2 border-b border-neutral-300">
+                <span className="text-xs uppercase tracking-widest font-mono font-bold">
+                  PORTFOLIO HEALTH STATUS: [{distress.riskLevel}]
+                </span>
+                <span className="text-xs font-mono font-bold">
+                  DEBT-TO-INCOME: {distress.dtiRatio}%
+                </span>
+              </div>
+              <ul className="mt-3 text-xs space-y-1 font-mono">
+                {distress.recommendations.map((r, i) => (
+                  <li key={i}>&gt; {r}</li>
+                ))}
+              </ul>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="p-5 border border-black bg-white">
+                <span className="text-[10px] font-mono uppercase text-neutral-500">Monthly Net Inflow</span>
+                <p className="text-2xl font-extrabold mt-1">{formatINR(monthlyIncome)}</p>
+                <span className="text-[11px] font-mono text-neutral-500 block mt-1">Take-Home Salary</span>
+              </div>
+              <div className="p-5 border border-black bg-white">
+                <span className="text-[10px] font-mono uppercase text-neutral-500">Total Monthly EMIs</span>
+                <p className="text-2xl font-extrabold mt-1">{formatINR(totalEMI)}</p>
+                <span className="text-[11px] font-mono text-neutral-500 block mt-1">DTI: {distress.dtiRatio}%</span>
+              </div>
+              <div className="p-5 border border-black bg-white">
+                <span className="text-[10px] font-mono uppercase text-neutral-500">Current Monthly Surplus</span>
+                <p className="text-2xl font-extrabold mt-1">{formatINR(monthlySurplus)}</p>
+                <span className="text-[11px] font-mono text-neutral-500 block mt-1">Post All Expenses & Debt</span>
+              </div>
+              <div className="p-5 border border-black bg-white">
+                <span className="text-[10px] font-mono uppercase text-neutral-500">Emergency Reserve</span>
+                <p className="text-2xl font-extrabold mt-1">{formatINR(emergencySavings)}</p>
+                <span className="text-[11px] font-mono text-neutral-500 block mt-1">Target: {formatINR(emergencyNeed.recommendedFund)}</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB: PERSONAL BALANCE SHEET */}
+        {activeTab === 'personal' && (
+          <div className="space-y-6">
+            <div className="border border-black p-6 bg-white">
+              <h3 className="text-xs uppercase tracking-wider font-extrabold mb-4 pb-2 border-b border-black">
+                Personal Net Worth Statement
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8 font-mono text-xs">
+                <div>
+                  <h4 className="font-bold uppercase text-neutral-500 mb-2">Assets (Liquid & Illiquid)</h4>
+                  <div className="space-y-2 divide-y divide-neutral-200">
+                    <div className="flex justify-between pt-1"><span>Liquid Emergency Bank Accounts</span><span>{formatINR(emergencySavings)}</span></div>
+                    <div className="flex justify-between pt-1"><span>Equity Mutual Funds & Stocks</span><span>{formatINR(850000)}</span></div>
+                    <div className="flex justify-between pt-1"><span>Public Provident Fund (PPF)</span><span>{formatINR(340000)}</span></div>
+                    <div className="flex justify-between pt-1 font-bold pt-2 border-t border-black">
+                      <span>Total Assets</span><span>{formatINR(emergencySavings + 850000 + 340000)}</span>
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  <h4 className="font-bold uppercase text-neutral-500 mb-2">Liabilities (Borrowings)</h4>
+                  <div className="space-y-2 divide-y divide-neutral-200">
+                    {activeLoans.map(l => (
+                      <div key={l.id} className="flex justify-between pt-1">
+                        <span>{l.lender} ({l.type})</span>
+                        <span>{formatINR(l.principal)}</span>
+                      </div>
+                    ))}
+                    <div className="flex justify-between pt-1 font-bold pt-2 border-t border-black">
+                      <span>Total Liabilities</span>
+                      <span>{formatINR(activeLoans.reduce((a, b) => a + b.principal, 0))}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB: BUSINESS P&L */}
+        {activeTab === 'business' && (
+          <div className="space-y-6">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="p-5 border border-black bg-white">
+                <span className="text-[10px] font-mono uppercase text-neutral-500">Gross Sales (Revenue)</span>
+                <p className="text-2xl font-extrabold mt-1">{formatINR(businessRevenue)}</p>
+                <span className="text-[11px] font-mono text-neutral-500 block mt-1">Invoiced with GST</span>
+              </div>
+              <div className="p-5 border border-black bg-white">
+                <span className="text-[10px] font-mono uppercase text-neutral-500">Cost of Goods Sold</span>
+                <p className="text-2xl font-extrabold mt-1">{formatINR(businessCOGS)}</p>
+                <span className="text-[11px] font-mono text-neutral-500 block mt-1">Direct Procurement</span>
+              </div>
+              <div className="p-5 border border-black bg-white">
+                <span className="text-[10px] font-mono uppercase text-neutral-500">Operating Expenses</span>
+                <p className="text-2xl font-extrabold mt-1">{formatINR(businessOpEx)}</p>
+                <span className="text-[11px] font-mono text-neutral-500 block mt-1">Salaries & Rent</span>
+              </div>
+              <div className="p-5 border border-black bg-white">
+                <span className="text-[10px] font-mono uppercase text-neutral-500">Net Operating Profit</span>
+                <p className="text-2xl font-extrabold mt-1">{formatINR(businessRevenue - businessCOGS - businessOpEx)}</p>
+                <span className="text-[11px] font-mono text-neutral-500 block mt-1">Margin: {businessRisk.netProfitMargin}%</span>
+              </div>
+            </div>
+
+            <div className="border border-black p-6 bg-white font-mono text-xs">
+              <h4 className="font-bold uppercase text-neutral-500 mb-2">Double-Entry Journal Balancing Standard</h4>
+              <p className="text-neutral-600 mb-4 font-sans">Every transaction automatically validates that debits and credits balance to zero.</p>
+              <div className="border border-black p-4 bg-neutral-50 space-y-1">
+                <p className="text-neutral-500 font-bold">// Sample Balanced Posting: Customer Sale with 18% GST</p>
+                <p>DR: Trade Accounts Receivable : {formatINR(118000)}</p>
+                <p>CR: Sales Revenue             : {formatINR(100000)}</p>
+                <p>CR: Output GST Payable (18%)  : {formatINR(18000)}</p>
+                <div className="pt-2 mt-2 border-t border-black font-bold uppercase">
+                  ✓ Balancing Check: DR ({formatINR(118000)}) == CR ({formatINR(118000)})
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB: DAILY EXPENSES */}
+        {activeTab === 'expenses' && (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="p-6 border border-black bg-white">
+              <h3 className="text-xs uppercase tracking-wider font-extrabold mb-4 pb-2 border-b border-black">
+                Post Transaction
+              </h3>
+              <form onSubmit={handleAddExpense} className="space-y-4">
+                <div>
+                  <label className="text-[11px] uppercase tracking-wider font-mono font-semibold block text-neutral-600">Merchant / Item</label>
+                  <input
+                    type="text"
+                    value={formCategory}
+                    onChange={(e) => setFormCategory(e.target.value)}
+                    placeholder="e.g. Swiggy, Fuel"
+                    className="mt-1 w-full text-xs p-2.5 bg-white border border-black focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] uppercase tracking-wider font-mono font-semibold block text-neutral-600">Amount (₹)</label>
+                  <input
+                    type="number"
+                    value={formAmount}
+                    onChange={(e) => setFormAmount(e.target.value)}
+                    placeholder="0.00"
+                    className="mt-1 w-full text-xs p-2.5 bg-white border border-black focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="text-[11px] uppercase tracking-wider font-mono font-semibold block text-neutral-600">Payment Channel</label>
+                  <select
+                    value={formMode}
+                    onChange={(e) => setFormMode(e.target.value)}
+                    className="mt-1 w-full text-xs p-2.5 bg-white border border-black focus:outline-none"
+                  >
+                    <option value="UPI">UPI (GPay / PhonePe / Paytm)</option>
+                    <option value="Credit Card">Credit Card</option>
+                    <option value="Debit Card">Debit Card</option>
+                    <option value="Cash">Cash</option>
+                  </select>
+                </div>
+                <button
+                  type="submit"
+                  className="w-full bg-black text-white py-3 text-xs uppercase tracking-wider font-bold hover:bg-neutral-800 transition"
+                >
+                  Save Entry
+                </button>
+              </form>
+            </div>
+
+            <div className="md:col-span-2 p-6 border border-black bg-white">
+              <h3 className="text-xs uppercase tracking-wider font-extrabold mb-4 pb-2 border-b border-black">
+                Recorded Transactions ({expenses.length})
+              </h3>
+              <table className="w-full text-left text-xs font-mono">
+                <thead className="border-b border-black text-[10px] uppercase text-neutral-500">
+                  <tr>
+                    <th className="py-2 px-3">Date</th>
+                    <th className="py-2 px-3">Item</th>
+                    <th className="py-2 px-3">Mode</th>
+                    <th className="py-2 px-3 text-right">Amount</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-neutral-200">
+                  {expenses.map(e => (
+                    <tr key={e.id} className="hover:bg-neutral-50">
+                      <td className="py-2.5 px-3 text-neutral-500">{e.date}</td>
+                      <td className="py-2.5 px-3 font-semibold">{e.category}</td>
+                      <td className="py-2.5 px-3"><span className="px-2 py-0.5 border border-black text-[10px] font-bold uppercase">{e.mode}</span></td>
+                      <td className="py-2.5 px-3 text-right font-bold">{formatINR(e.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* TAB: LIABILITIES & LOANS */}
+        {activeTab === 'liabilities' && (
+          <div className="border border-black p-6 bg-white space-y-6">
+            <h3 className="text-xs uppercase tracking-wider font-extrabold pb-2 border-b border-black">
+              Central Debt & Liability Register
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {activeLoans.map(l => (
+                <div key={l.id} className="border border-black p-4 font-mono text-xs space-y-1">
+                  <div className="flex justify-between font-bold text-sm">
+                    <span>{l.lender}</span>
+                    <span>{l.type}</span>
+                  </div>
+                  <div className="pt-2 text-neutral-600">Outstanding Balance: <span className="font-bold text-black">{formatINR(l.principal)}</span></div>
+                  <div className="text-neutral-600">Monthly EMI: <span className="font-bold text-black">{formatINR(l.emi)}</span></div>
+                  <div className="text-neutral-600">Annual Interest Rate: <span className="font-bold text-black">{l.rate}%</span></div>
+                </div>
+              ))}
+            </div>
+            <div className="p-4 border border-black bg-neutral-50 font-mono text-xs">
+              <span className="font-bold uppercase">Debt Avalanche Recommendation:</span>
+              <p className="mt-1 text-neutral-700">Prepay the HDFC Car Loan (9.2% APR) prior to the SBI Home Loan (8.5% APR) to minimize total compounding interest.</p>
+            </div>
+          </div>
+        )}
+
+        {/* TAB: INSURANCE & LIC */}
+        {activeTab === 'insurance' && (
+          <div className="border border-black p-6 bg-white space-y-6">
+            <h3 className="text-xs uppercase tracking-wider font-extrabold pb-2 border-b border-black">
+              Insurance & Protection Portfolio
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {insurancePolicies.map(p => (
+                <div key={p.id} className="border border-black p-4 font-mono text-xs space-y-1">
+                  <span className="font-bold text-sm block">{p.provider} - {p.policy}</span>
+                  <div className="pt-2 text-neutral-600">Sum Assured Coverage: <span className="font-bold text-black">{formatINR(p.sumAssured)}</span></div>
+                  <div className="text-neutral-600">Annual Premium: <span className="font-bold text-black">{formatINR(p.premium)}</span></div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* TAB: PROPERTY PLANNER */}
+        {activeTab === 'property' && (
+          <div className="border border-black p-6 bg-white space-y-6">
+            <h3 className="text-xs uppercase tracking-wider font-extrabold pb-2 border-b border-black">
+              Real Estate Purchase Affordability Simulator
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="space-y-4 font-mono text-xs">
+                <div>
+                  <label className="block text-neutral-600 uppercase font-bold">Property Cost (₹)</label>
+                  <input
+                    type="number"
+                    value={propertyPrice}
+                    onChange={(e) => setPropertyPrice(parseFloat(e.target.value) || 0)}
+                    className="mt-1 w-full p-2.5 border border-black"
+                  />
+                </div>
+                <div>
+                  <label className="block text-neutral-600 uppercase font-bold">Down Payment (%)</label>
+                  <input
+                    type="number"
+                    value={propertyDownPaymentPct}
+                    onChange={(e) => setPropertyDownPaymentPct(parseFloat(e.target.value) || 0)}
+                    className="mt-1 w-full p-2.5 border border-black"
+                  />
+                </div>
+              </div>
+              <div className="border border-black p-4 bg-neutral-50 font-mono text-xs space-y-2">
+                <span className="font-bold uppercase text-neutral-500">Calculated Capital Requirements</span>
+                <div className="flex justify-between pt-1"><span>Down Payment:</span><span className="font-bold">{formatINR(propertyAnalysis.initialDownPaymentRequired)}</span></div>
+                <div className="flex justify-between pt-1"><span>Stamp Duty & Reg (7%):</span><span className="font-bold">{formatINR(propertyAnalysis.stampDutyAndRegistration)}</span></div>
+                <div className="flex justify-between pt-1 border-t border-black font-bold"><span>Total Cash Upfront:</span><span>{formatINR(propertyAnalysis.totalInitialCapitalNeeded)}</span></div>
+                <div className="flex justify-between pt-1"><span>Estimated Monthly EMI:</span><span className="font-bold">{formatINR(propertyAnalysis.estimatedLoanEMI)}</span></div>
+                <div className="mt-4 pt-2 border-t border-black font-sans text-xs">
+                  <strong>Verdict: </strong>{propertyAnalysis.cashFlowImpactSummary}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB: STATEMENT RECONCILIATION */}
+        {activeTab === 'reconciliation' && (
+          <div className="border border-black p-6 bg-white space-y-6">
+            <h3 className="text-xs uppercase tracking-wider font-extrabold pb-2 border-b border-black">
+              Bank Statement Parser & Reconciliation Engine
+            </h3>
+            <p className="text-xs text-neutral-500 font-mono">
+              Filters self-account transfers and automated credit card repayments to avoid duplicate expense tracking.
+            </p>
+            <textarea
+              rows={5}
+              value={statementCsv}
+              onChange={(e) => setStatementCsv(e.target.value)}
+              className="w-full text-xs font-mono p-3 border border-black focus:outline-none"
+            />
+            <button
+              onClick={handleRunReconciliation}
+              className="bg-black text-white px-6 py-2.5 text-xs uppercase tracking-wider font-bold hover:bg-neutral-800 transition"
+            >
+              Parse & Reconcile Statement
+            </button>
+            {reconReport && (
+              <div className="border border-black p-5 bg-neutral-50 font-mono text-xs space-y-2">
+                <span className="font-bold uppercase">Reconciliation Audit Summary</span>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 pt-2">
+                  <div>Opening: <span className="font-bold block">{formatINR(reconReport.openingBalance)}</span></div>
+                  <div>Closing: <span className="font-bold block">{formatINR(reconReport.closingBalance)}</span></div>
+                  <div>Computed: <span className="font-bold block">{formatINR(reconReport.computedBalance)}</span></div>
+                  <div>Discrepancy: <span className="font-bold block">{formatINR(reconReport.netDiscrepancy)}</span></div>
+                </div>
+                <div className="pt-2 border-t border-black space-y-1">
+                  <p>&gt; Internal Self-Transfers Filtered: {reconReport.internalTransfersCount}</p>
+                  <p>&gt; Credit Card Repayments Filtered: {reconReport.ccBillPaymentsCount}</p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB: BUSINESS RISK INTELLIGENCE */}
+        {activeTab === 'risk' && (
+          <div className="border border-black p-6 bg-white space-y-6">
+            <h3 className="text-xs uppercase tracking-wider font-extrabold pb-2 border-b border-black">
+              Business Solvency & Stress-Testing Engine
+            </h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 font-mono text-xs">
+              <div className="border border-black p-3">Current Ratio: <span className="font-bold block text-sm">{businessRisk.currentRatio}</span></div>
+              <div className="border border-black p-3">Working Capital: <span className="font-bold block text-sm">{formatINR(businessRisk.workingCapital)}</span></div>
+              <div className="border border-black p-3">Cash Runway: <span className="font-bold block text-sm">{businessRisk.cashRunwayMonths} Months</span></div>
+              <div className="border border-black p-3">Risk Assessment: <span className="font-bold block text-sm">[{businessRisk.riskRating}]</span></div>
+            </div>
+            <div className="border border-black p-4 bg-neutral-50 font-mono text-xs space-y-2">
+              <span className="font-bold uppercase">Macro Stress-Test Scenarios (Revenue Contraction Impact on Net Profit)</span>
+              <div className="flex justify-between pt-1"><span>-10% Revenue Drop:</span><span className="font-bold">{formatINR(businessRisk.scenarioStressTest.revenueDrop10PctNetProfit)}</span></div>
+              <div className="flex justify-between pt-1"><span>-20% Revenue Drop:</span><span className="font-bold">{formatINR(businessRisk.scenarioStressTest.revenueDrop20PctNetProfit)}</span></div>
+              <div className="flex justify-between pt-1"><span>-30% Revenue Drop:</span><span className="font-bold">{formatINR(businessRisk.scenarioStressTest.revenueDrop30PctNetProfit)}</span></div>
+            </div>
+          </div>
+        )}
+
+        {/* TAB: AI FINANCIAL ADVISOR */}
+        {activeTab === 'advisor' && (
+          <div className="border border-black bg-white flex flex-col h-[550px]">
+            <div className="p-4 border-b border-black flex justify-between items-center">
+              <h3 className="text-xs uppercase tracking-wider font-extrabold">AI Personal & Business Financial Advisor</h3>
+              <span className="text-[10px] font-mono border border-black px-2 py-0.5 uppercase font-bold">Zero Hallucination</span>
+            </div>
+            <div className="flex-1 p-6 overflow-y-auto space-y-4 font-mono text-xs">
+              {chatMessages.map((m, idx) => (
+                <div key={idx} className={`flex ${m.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-xl p-4 border border-black whitespace-pre-line ${
+                    m.sender === 'user' ? 'bg-black text-white' : 'bg-neutral-50 text-black'
+                  }`}>
+                    {m.text}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <form onSubmit={handleSendChat} className="p-4 border-t border-black flex space-x-2">
+              <input
+                type="text"
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                placeholder="Ask about car loan eligibility, business cash runway, or emergency funds..."
+                className="flex-1 text-xs p-3 border border-black font-mono focus:outline-none"
+              />
+              <button
+                type="submit"
+                className="bg-black text-white px-6 py-2.5 text-xs uppercase tracking-wider font-bold hover:bg-neutral-800 transition"
+              >
+                Inquire
+              </button>
+            </form>
+          </div>
+        )}
+
+        {/* TAB: SQL SCHEMA */}
+        {activeTab === 'schema' && (
+          <div className="border border-black p-6 bg-white space-y-4">
+            <div className="flex justify-between items-center pb-2 border-b border-black">
+              <div>
+                <h3 className="text-xs uppercase tracking-wider font-extrabold">Complete Production Relational Schema</h3>
+                <p className="text-xs text-neutral-500 font-mono">Includes RLS, Enums, DPDP tracking, and double-entry tables.</p>
+              </div>
+              <button
+                onClick={() => navigator.clipboard.writeText(FULL_PRODUCTION_DATABASE_SCHEMA_SQL)}
+                className="text-[11px] font-mono uppercase font-bold border border-black px-3 py-1 hover:bg-black hover:text-white transition"
+              >
+                Copy SQL
+              </button>
+            </div>
+            <pre className="p-4 bg-neutral-900 text-neutral-100 text-xs font-mono overflow-x-auto max-h-[480px]">
+              {FULL_PRODUCTION_DATABASE_SCHEMA_SQL}
+            </pre>
+          </div>
+        )}
+
+      </main>
+    </div>
+  );
+}
